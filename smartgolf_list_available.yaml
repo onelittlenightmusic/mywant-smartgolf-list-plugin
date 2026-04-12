@@ -81,23 +81,40 @@ wantType:
       runtime: shell
       script: |
         #!/bin/sh
-        SCRIPT_DIR="$(dirname "$0")"
-        # Try plugin dir first, then ~/.mywant/skills fallback
-        if [ -f "$SCRIPT_DIR/main.py" ]; then
-          MAIN="$SCRIPT_DIR/main.py"
+        # Plugin is typically in ~/.mywant/custom-types/mywant-smartgolf-list-plugin
+        PLUGIN_DIR="$HOME/.mywant/custom-types/mywant-smartgolf-list-plugin"
+        # Fallback to skills directory
+        SKILLS_DIR="$HOME/.mywant/skills/list-available-times"
+
+        if [ -f "$PLUGIN_DIR/main.py" ]; then
+          MAIN="$PLUGIN_DIR/main.py"
+        elif [ -f "$SKILLS_DIR/main.py" ]; then
+          MAIN="$SKILLS_DIR/main.py"
         else
-          MAIN="$(dirname "$(dirname "$SCRIPT_DIR")")/skills/list-available-times/main.py"
+          # Final fallback (for local development within repo)
+          MAIN="./main.py"
         fi
-        OUTPUT=$(python3 "$MAIN" 2>/dev/null)
+
+        if [ ! -f "$MAIN" ]; then
+          printf '{"current_updates": {"error": "smartgolf list script not found at %s", "status": "failed"}}' "$MAIN"
+          exit 1
+        fi
+
+        ERR_FILE=$(mktemp)
+        OUTPUT=$(python3 "$MAIN" 2>"$ERR_FILE")
         EXIT_CODE=$?
 
         if [ $EXIT_CODE -eq 0 ]; then
+          rm -f "$ERR_FILE"
           COUNT=$(printf '%s' "$OUTPUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('available_times',[])))")
           SUMMARY="${COUNT} room-date slots available"
           ESCAPED_SUMMARY=$(printf '%s' "$SUMMARY" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
           printf '{"json_data": %s, "current_updates": {"status": "done", "summary": %s}}' "$OUTPUT" "$ESCAPED_SUMMARY"
         else
-          printf '{"current_updates": {"error": "smartgolf list script failed", "status": "failed"}}'
+          ERR_MSG=$(cat "$ERR_FILE")
+          rm -f "$ERR_FILE"
+          ESCAPED_ERR=$(printf 'smartgolf list script failed: %s' "$ERR_MSG" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+          printf '{"current_updates": {"error": %s, "status": "failed"}}' "$ESCAPED_ERR"
         fi
 
   examples:
