@@ -10,7 +10,7 @@ wantType:
     category: smartgolf
     pattern: independent
 
-  finalResultField: summary
+  finalResultField: smartgolf_all_available_times
 
   achievedWhen:
     field: status
@@ -18,6 +18,27 @@ wantType:
     value: "pending"
 
   state:
+    - name: skill_timeout_seconds
+      description: Max seconds to wait for the skill script to complete (default 120)
+      type: int
+      label: goal
+      persistent: false
+      initialValue: 120
+
+    - name: skill_path
+      description: Path to the MRS skill script (set by onInitialize)
+      type: string
+      label: current
+      persistent: false
+      initialValue: ""
+
+    - name: mrs_raw_output
+      description: Raw JSON output from the MRS skill (source for fetchFrom fields)
+      type: object
+      label: current
+      persistent: false
+      initialValue: null
+
     - name: status
       description: Execution status (pending, done, failed)
       type: string
@@ -39,13 +60,21 @@ wantType:
       persistent: true
       initialValue: ""
 
-    - name: raw_json
-      description: Full JSON output from skill
-      type: string
+    - name: today_slots
+      description: Available slots for today
+      type: object
       label: current
       persistent: true
-      initialValue: ""
-      onFetchData: "raw_text"
+      initialValue: null
+
+    - name: smartgolf_all_available_times
+      description: Full JSON output from skill containing all rooms and dates
+      type: object
+      label: current
+      persistent: true
+      initialValue: {}
+      fetchFrom: mrs_raw_output
+      onFetchData: "available_times"
 
     - name: first_room
       description: First available room name
@@ -53,6 +82,7 @@ wantType:
       label: current
       persistent: true
       initialValue: ""
+      fetchFrom: mrs_raw_output
       onFetchData: "available_times[0].room"
 
     - name: first_date
@@ -61,6 +91,7 @@ wantType:
       label: current
       persistent: true
       initialValue: ""
+      fetchFrom: mrs_raw_output
       onFetchData: "available_times[0].date"
 
     - name: first_time
@@ -69,53 +100,16 @@ wantType:
       label: current
       persistent: true
       initialValue: ""
+      fetchFrom: mrs_raw_output
       onFetchData: "available_times[0].times[0].time"
 
   onInitialize:
     current:
       status: "pending"
+      skill_path: "~/.mywant/custom-types/mywant-smartgolf-list-plugin/main.py"
 
-  inlineAgents:
-    - name: run_list_available
-      type: do
-      runtime: shell
-      script: |
-        #!/bin/sh
-        # Plugin is typically in ~/.mywant/custom-types/mywant-smartgolf-list-plugin
-        PLUGIN_DIR="$HOME/.mywant/custom-types/mywant-smartgolf-list-plugin"
-        # Fallback to skills directory
-        SKILLS_DIR="$HOME/.mywant/skills/list-available-times"
-
-        if [ -f "$PLUGIN_DIR/main.py" ]; then
-          MAIN="$PLUGIN_DIR/main.py"
-        elif [ -f "$SKILLS_DIR/main.py" ]; then
-          MAIN="$SKILLS_DIR/main.py"
-        else
-          # Final fallback (for local development within repo)
-          MAIN="./main.py"
-        fi
-
-        if [ ! -f "$MAIN" ]; then
-          printf '{"current_updates": {"error": "smartgolf list script not found at %s", "status": "failed"}}' "$MAIN"
-          exit 1
-        fi
-
-        ERR_FILE=$(mktemp)
-        OUTPUT=$(python3 "$MAIN" 2>"$ERR_FILE")
-        EXIT_CODE=$?
-
-        if [ $EXIT_CODE -eq 0 ]; then
-          rm -f "$ERR_FILE"
-          COUNT=$(printf '%s' "$OUTPUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('available_times',[])))")
-          SUMMARY="${COUNT} room-date slots available"
-          ESCAPED_SUMMARY=$(printf '%s' "$SUMMARY" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
-          printf '{"json_data": %s, "current_updates": {"status": "done", "summary": %s}}' "$OUTPUT" "$ESCAPED_SUMMARY"
-        else
-          ERR_MSG=$(cat "$ERR_FILE")
-          rm -f "$ERR_FILE"
-          ESCAPED_ERR=$(printf 'smartgolf list script failed: %s' "$ERR_MSG" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
-          printf '{"current_updates": {"error": %s, "status": "failed"}}' "$ESCAPED_ERR"
-        fi
+  requires:
+    - monitor_mrs_agent
 
   examples:
     - name: List SmartGolf Available Times
@@ -124,3 +118,20 @@ wantType:
         metadata:
           name: check_smartgolf
           type: smartgolf_list_available
+        spec:
+          exposes:
+            - currentState: smartgolf_all_available_times
+              as: smartgolf_all_available_times
+            - currentState: today_slots
+              as: today_slots
+
+    - name: SmartGolf Selector Example
+      description: Interactive selector for SmartGolf slots
+      want:
+        metadata:
+          name: smartgolf-selector
+          type: choice
+        spec:
+          params:
+            target_param: selected_slot
+            choice_import_field: wants.check_smartgolf.smartgolf_all_available_times
