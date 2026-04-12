@@ -12,11 +12,6 @@ wantType:
 
   finalResultField: smartgolf_all_available_times
 
-  achievedWhen:
-    field: status
-    operator: "!="
-    value: "pending"
-
   state:
     - name: skill_timeout_seconds
       description: Max seconds to wait for the skill script to complete (default 120)
