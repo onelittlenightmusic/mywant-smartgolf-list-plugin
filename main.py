@@ -142,15 +142,27 @@ def main():
 
             page.close()
 
-            all_available.sort(key=lambda x: x["date"])
-            output = {"available_times": all_available}
+            # Flatten results: [{room, date, times: [...]}] -> [{room, date, time}]
+            flattened = []
+            for entry in all_available:
+                room = entry.get("room")
+                date = entry.get("date")
+                for t in entry.get("times", []):
+                    flattened.append({
+                        "room": room,
+                        "date": date,
+                        "time": t.get("time")
+                    })
+
+            flattened.sort(key=lambda x: (x["date"], x["time"], x["room"]))
+            output = {"available_times": flattened}
             if errors:
                 output["errors"] = errors
 
             print(json.dumps(output, ensure_ascii=False))
 
     except Exception as e:
-        print(json.dumps({"error": str(e)}, ensure_ascii=False), file=sys.stderr)
+        print(json.dumps({"error": str(e)}, ensure_ascii=False))
         sys.exit(1)
 
 
