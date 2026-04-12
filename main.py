@@ -1,0 +1,158 @@
+import json
+import sys
+import time
+from datetime import datetime, timezone, timedelta
+from playwright.sync_api import sync_playwright
+
+JST = timezone(timedelta(hours=9))
+
+LOCATIONS = [
+    "https://smartgolf.stores.jp/reserve/smartgolf_kitashinjuku/3421038/book/course_type",
+    "https://smartgolf.stores.jp/reserve/smartgolf_nakanoshimbashi/1459178/book/course_type",
+    "https://smartgolf.stores.jp/reserve/smartgolf_shinnakano/4619269/book/course_type",
+]
+
+
+def get_available_times(page):
+    """今日・明日の空き時間をJSTで取得"""
+    today = datetime.now(JST).date()
+    tomorrow = today + timedelta(days=1)
+
+    date_inputs = page.query_selector_all('input[name="dateTimeSelection"]')
+    today_times, tomorrow_times = [], []
+
+    for inp in date_inputs:
+        val = inp.get_attribute('value')
+        if not val:
+            continue
+        try:
+            dt_jst = datetime.fromisoformat(val.replace('Z', '+00:00')).astimezone(JST)
+        except ValueError:
+            continue
+
+        date_jst = dt_jst.date()
+        if date_jst not in (today, tomorrow):
+            continue
+
+        label = inp.evaluate_handle('el => el.closest("label")')
+        if not label:
+            continue
+        content = label.query_selector('[class*="GridCellInput_content__"]')
+        if not content:
+            continue
+        svg = content.query_selector('svg')
+        if not svg:
+            continue
+        fill = svg.evaluate('el => getComputedStyle(el).fill')
+        if 'rgb(0, 102, 255)' not in fill:
+            continue
+
+        t = dt_jst.strftime('%H:%M')
+        if date_jst == today:
+            today_times.append(t)
+        else:
+            tomorrow_times.append(t)
+
+    return str(today), today_times, str(tomorrow), tomorrow_times
+
+
+def scrape_location(page, url):
+    """1店舗分の全部屋の空き時間を取得して返す"""
+    page.goto(url, wait_until="domcontentloaded")
+    time.sleep(3)
+
+    select_btn = page.query_selector('[class*="CourseSelectModal"]')
+    if not select_btn:
+        return None, "Service select button not found"
+
+    page.evaluate('btn => btn.click()', select_btn)
+    time.sleep(1)
+
+    modal = page.query_selector('[class*="RSModal_content"]')
+    if not modal:
+        return None, "Service selection modal not found"
+
+    radio_inputs = modal.query_selector_all('input[type="radio"]')
+    if not radio_inputs:
+        return None, "No rooms found in modal"
+
+    # 部屋名を取得してモーダルを閉じる
+    room_names = []
+    for inp in radio_inputs:
+        label = inp.evaluate_handle('el => el.closest("label")')
+        bold = label.query_selector('.font-bold')
+        name = bold.inner_text().strip() if bold else f"Room{len(room_names)+1}"
+        room_names.append(name)
+
+    close_btn = modal.query_selector('button')  # 最初のボタンはclose
+    page.evaluate('btn => btn.click()', close_btn)
+    time.sleep(0.5)
+
+    # 各部屋の空き時間を取得
+    results = []
+    for room_idx, room_name in enumerate(room_names):
+        select_btn = page.query_selector('[class*="CourseSelectModal"]')
+        page.evaluate('btn => btn.click()', select_btn)
+        time.sleep(1)
+
+        modal = page.query_selector('[class*="RSModal_content"]')
+        radio_inputs = modal.query_selector_all('input[type="radio"]')
+
+        page.evaluate('inp => inp.closest("label").click()', radio_inputs[room_idx])
+        time.sleep(0.3)
+
+        ok_btn = modal.query_selector('button:has-text("OK")')
+        page.evaluate('btn => btn.click()', ok_btn)
+        time.sleep(2)
+
+        today_str, today_times, tomorrow_str, tomorrow_times = get_available_times(page)
+
+        if today_times:
+            results.append({
+                "room": room_name,
+                "date": today_str,
+                "times": [{"number": i + 1, "time": t} for i, t in enumerate(today_times)],
+            })
+        if tomorrow_times:
+            results.append({
+                "room": room_name,
+                "date": tomorrow_str,
+                "times": [{"number": i + 1, "time": t} for i, t in enumerate(tomorrow_times)],
+            })
+
+    return results, None
+
+
+def main():
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.connect_over_cdp("http://localhost:9222")
+            context = browser.contexts[0]
+            page = context.new_page()
+
+            all_available = []
+            errors = []
+
+            for url in LOCATIONS:
+                results, err = scrape_location(page, url)
+                if err:
+                    errors.append({"url": url, "error": err})
+                else:
+                    all_available.extend(results)
+
+            page.close()
+
+            all_available.sort(key=lambda x: x["date"])
+            output = {"available_times": all_available}
+            if errors:
+                output["errors"] = errors
+
+            print(json.dumps(output, ensure_ascii=False))
+
+    except Exception as e:
+        print(json.dumps({"error": str(e)}, ensure_ascii=False), file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

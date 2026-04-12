@@ -1,0 +1,109 @@
+wantType:
+  metadata:
+    name: smartgolf_list_available
+    title: SmartGolf Available Times
+    description: |
+      Lists available booking times for all SmartGolf rooms (北新宿/中野新橋/新中野)
+      for today and tomorrow via Playwright.
+      Completes after a single execution.
+    version: '1.0'
+    category: smartgolf
+    pattern: independent
+
+  finalResultField: summary
+
+  achievedWhen:
+    field: status
+    operator: "!="
+    value: "pending"
+
+  state:
+    - name: status
+      description: Execution status (pending, done, failed)
+      type: string
+      label: current
+      persistent: true
+      initialValue: "pending"
+
+    - name: error
+      description: Error message if execution failed
+      type: string
+      label: current
+      persistent: true
+      initialValue: ""
+
+    - name: summary
+      description: Summary of available times
+      type: string
+      label: current
+      persistent: true
+      initialValue: ""
+
+    - name: raw_json
+      description: Full JSON output from skill
+      type: string
+      label: current
+      persistent: true
+      initialValue: ""
+      onFetchData: "raw_text"
+
+    - name: first_room
+      description: First available room name
+      type: string
+      label: current
+      persistent: true
+      initialValue: ""
+      onFetchData: "available_times[0].room"
+
+    - name: first_date
+      description: First available date
+      type: string
+      label: current
+      persistent: true
+      initialValue: ""
+      onFetchData: "available_times[0].date"
+
+    - name: first_time
+      description: First available time slot
+      type: string
+      label: current
+      persistent: true
+      initialValue: ""
+      onFetchData: "available_times[0].times[0].time"
+
+  onInitialize:
+    current:
+      status: "pending"
+
+  inlineAgents:
+    - name: run_list_available
+      type: do
+      runtime: shell
+      script: |
+        #!/bin/sh
+        SCRIPT_DIR="$(dirname "$0")"
+        # Try plugin dir first, then ~/.mywant/skills fallback
+        if [ -f "$SCRIPT_DIR/main.py" ]; then
+          MAIN="$SCRIPT_DIR/main.py"
+        else
+          MAIN="$(dirname "$(dirname "$SCRIPT_DIR")")/skills/list-available-times/main.py"
+        fi
+        OUTPUT=$(python3 "$MAIN" 2>/dev/null)
+        EXIT_CODE=$?
+
+        if [ $EXIT_CODE -eq 0 ]; then
+          COUNT=$(printf '%s' "$OUTPUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('available_times',[])))")
+          SUMMARY="${COUNT} room-date slots available"
+          ESCAPED_SUMMARY=$(printf '%s' "$SUMMARY" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+          printf '{"json_data": %s, "current_updates": {"status": "done", "summary": %s}}' "$OUTPUT" "$ESCAPED_SUMMARY"
+        else
+          printf '{"current_updates": {"error": "smartgolf list script failed", "status": "failed"}}'
+        fi
+
+  examples:
+    - name: List SmartGolf Available Times
+      description: Check all SmartGolf rooms for today/tomorrow availability
+      want:
+        metadata:
+          name: check_smartgolf
+          type: smartgolf_list_available
