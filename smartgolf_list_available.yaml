@@ -100,7 +100,6 @@ wantType:
 
   onInitialize:
     current:
-      status: "pending"
       skill_path: "~/.mywant/custom-types/mywant-smartgolf-list-plugin/main.py"
 
   requires:
