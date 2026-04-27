@@ -20,6 +20,10 @@ LOCATIONS = [
 ]
 
 
+def report_progress(percentage, message=""):
+    print(json.dumps({"_progress": percentage, "_message": message}, ensure_ascii=False), flush=True)
+
+
 def get_available_times(page):
     """今日・明日の空き時間をJSTで取得"""
     today = datetime.now(JST).date()
@@ -63,7 +67,7 @@ def get_available_times(page):
     return str(today), today_times, str(tomorrow), tomorrow_times
 
 
-def scrape_location(page, url):
+def scrape_location(page, url, on_room_progress=None):
     """1店舗分の全部屋の空き時間を取得して返す"""
     page.goto(url, wait_until="domcontentloaded")
     time.sleep(3)
@@ -98,6 +102,9 @@ def scrape_location(page, url):
     # 各部屋の空き時間を取得
     results = []
     for room_idx, room_name in enumerate(room_names):
+        if on_room_progress:
+            on_room_progress(room_idx, len(room_names), room_name)
+
         select_btn = page.query_selector('[class*="CourseSelectModal"]')
         page.evaluate('btn => btn.click()', select_btn)
         time.sleep(1)
@@ -133,20 +140,34 @@ def scrape_location(page, url):
 def main():
     try:
         with sync_playwright() as p:
+            report_progress(5, "Connecting to browser")
             browser = p.chromium.connect_over_cdp("http://localhost:9222")
             context = browser.contexts[0]
             page = context.new_page()
+            report_progress(10, "Connected")
 
             all_available = []
             errors = []
+            total_locations = len(LOCATIONS)
+            # 各店舗に10〜90%の範囲を均等割り当て
+            pct_per_location = 80 // total_locations
 
-            for url in LOCATIONS:
-                results, err = scrape_location(page, url)
+            for loc_idx, url in enumerate(LOCATIONS):
+                location_name = url.split("/")[5].replace("smartgolf_", "").replace("_", " ")
+                pct_base = 10 + loc_idx * pct_per_location
+                report_progress(pct_base, f"Scanning {location_name} ({loc_idx + 1}/{total_locations})")
+
+                def on_room(room_idx, room_total, room_name, _base=pct_base, _span=pct_per_location):
+                    pct = _base + int((room_idx / room_total) * _span)
+                    report_progress(pct, f"{location_name} - {room_name} ({room_idx + 1}/{room_total})")
+
+                results, err = scrape_location(page, url, on_room_progress=on_room)
                 if err:
                     errors.append({"url": url, "error": err})
                 else:
                     all_available.extend(results)
 
+            report_progress(92, "Finalizing results")
             page.close()
 
             # Flatten results: [{room, date, times: [...]}] -> [{room, date, time}]
@@ -166,10 +187,11 @@ def main():
             if errors:
                 output["errors"] = errors
 
-            print(json.dumps(output, ensure_ascii=False))
+            report_progress(100, "Done")
+            print(json.dumps(output, ensure_ascii=False), flush=True)
 
     except Exception as e:
-        print(json.dumps({"error": str(e)}, ensure_ascii=False))
+        print(json.dumps({"error": str(e)}, ensure_ascii=False), flush=True)
         sys.exit(1)
 
 
