@@ -34,13 +34,6 @@ wantType:
       persistent: false
       initialValue: null
 
-    - name: status
-      description: Execution status (pending, done, failed)
-      type: string
-      label: current
-      persistent: true
-      initialValue: "pending"
-
     - name: error
       description: Error message if execution failed
       type: string
@@ -97,6 +90,16 @@ wantType:
       initialValue: ""
       fetchFrom: mrs_raw_output
       onFetchData: "available_times[0].times[0].time"
+
+  finalizeWhen:
+    achieved:
+      field: mrs_raw_output
+      operator: "!="
+      value: null
+    failed:
+      field: error
+      operator: "!="
+      value: ""
 
   onInitialize:
     current:
