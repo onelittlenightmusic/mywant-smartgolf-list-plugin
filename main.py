@@ -2,7 +2,14 @@ import json
 import sys
 import time
 from datetime import datetime, timezone, timedelta
-from playwright.sync_api import sync_playwright
+
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    print(json.dumps({
+        "error": "playwright module not found. Install with: pip3 install playwright && playwright install chromium"
+    }, ensure_ascii=False))
+    sys.exit(1)
 
 JST = timezone(timedelta(hours=9))
 
