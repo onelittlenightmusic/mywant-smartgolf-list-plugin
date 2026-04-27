@@ -1,0 +1,34 @@
+agent:
+  metadata:
+    name: smartgolf_list_available_agent
+    capability: smartgolf_list_available
+    type: monitor
+  script:
+    path: ./main.py
+    timeout_seconds: 120
+  state_updates:
+    - name: status
+      type: string
+      label: current
+      persistent: true
+      onFetchData: "status"
+    - name: smartgolf_all_available_times
+      type: object
+      label: current
+      persistent: true
+      onFetchData: "available_times"
+    - name: first_room
+      type: string
+      label: current
+      persistent: true
+      onFetchData: "available_times[0].room"
+    - name: first_date
+      type: string
+      label: current
+      persistent: true
+      onFetchData: "available_times[0].date"
+    - name: first_time
+      type: string
+      label: current
+      persistent: true
+      onFetchData: "available_times[0].time"

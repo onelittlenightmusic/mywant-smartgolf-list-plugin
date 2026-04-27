@@ -183,7 +183,7 @@ def main():
                     })
 
             flattened.sort(key=lambda x: (x["date"], x["time"], x["room"]))
-            output = {"available_times": flattened}
+            output = {"status": "done", "available_times": flattened}
             if errors:
                 output["errors"] = errors
 
