@@ -1,6 +1,8 @@
 import json
 import sys
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 
 try:
@@ -17,76 +19,131 @@ LOCATIONS = [
     "https://smartgolf.stores.jp/reserve/smartgolf_shinnakano/4619269/book/course_type",
 ]
 
-def report_progress(percentage, message=""):
-    print(json.dumps({"_progress": percentage, "_message": message}, ensure_ascii=False), flush=True)
+# ── 並列プログレス管理 ─────────────────────────────────────────────────────
+_progress_lock = threading.Lock()
+_progress_state: dict[str, tuple[int, str]] = {}  # loc_name → (pct, message)
+
+def _flush_progress() -> None:
+    """全店の進捗を平均して1行出力する（ロック内で呼ぶこと）。"""
+    if not _progress_state:
+        return
+    overall = int(sum(v[0] for v in _progress_state.values()) / len(LOCATIONS))
+    msgs = [v[1] for v in _progress_state.values() if v[1]]
+    print(json.dumps(
+        {"_progress": overall, "_message": " | ".join(msgs)},
+        ensure_ascii=False,
+    ), flush=True)
+
+def update_progress(loc_name: str, pct: int, msg: str) -> None:
+    with _progress_lock:
+        _progress_state[loc_name] = (pct, msg)
+        _flush_progress()
+
+
+# ── スクレイピング ────────────────────────────────────────────────────────
 
 def get_available_times(page):
-    today = datetime.now(JST).date()
+    today    = datetime.now(JST).date()
     tomorrow = today + timedelta(days=1)
-    
-    # Get all radio buttons for date-time
+
     date_inputs = page.query_selector_all('input[name="dateTimeSelection"]')
     today_times, tomorrow_times = [], []
+
     for inp in date_inputs:
         val = inp.get_attribute('value')
-        if not val: continue
+        if not val:
+            continue
         try:
             dt_jst = datetime.fromisoformat(val.replace('Z', '+00:00')).astimezone(JST)
-        except: continue
-        
+        except Exception:
+            continue
+
         date_jst = dt_jst.date()
-        if date_jst not in (today, tomorrow): continue
-        
-        # Check if enabled (not filled)
+        if date_jst not in (today, tomorrow):
+            continue
+
         label = inp.evaluate_handle('el => el.closest("label")')
-        svg = label.query_selector('svg')
+        svg   = label.query_selector('svg')
         if svg and 'rgb(0, 102, 255)' in svg.evaluate('el => getComputedStyle(el).fill'):
             t = dt_jst.strftime('%H:%M')
-            if date_jst == today: today_times.append(t)
-            else: tomorrow_times.append(t)
-            
+            if date_jst == today:
+                today_times.append(t)
+            else:
+                tomorrow_times.append(t)
+
     return str(today), today_times, str(tomorrow), tomorrow_times
 
-def scrape_location(page, url, on_progress):
-    page.goto(url, wait_until="domcontentloaded")
-    time.sleep(2)
-    
-    # Radios are already on the page
-    radio_btns = page.query_selector_all('input[type="radio"]')
-    room_data = []
-    
-    for i, btn in enumerate(radio_btns):
-        label = btn.evaluate_handle('el => el.closest("label")')
-        room_name = label.inner_text().split('\n')[0].strip()
-        on_progress(i, len(radio_btns), room_name)
-        
-        label.click()
-        time.sleep(2)
-        
-        today_str, today_times, tom_str, tom_times = get_available_times(page)
-        if today_times:
-            room_data.append({"room": room_name, "date": today_str, "times": today_times})
-        if tom_times:
-            room_data.append({"room": room_name, "date": tom_str, "times": tom_times})
-            
-    return room_data
 
-def main():
+def scrape_location_worker(url: str) -> list[dict]:
+    """1店舗分を独立した Playwright インスタンスでスクレイピングする。
+
+    Playwright sync API はスレッド間で共有できないため、
+    スレッドごとに sync_playwright() を生成する。
+    """
+    loc_name = url.split("/")[5]
+    update_progress(loc_name, 5, f"{loc_name} 開始")
+
     with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp("http://localhost:9222")
-        page = browser.contexts[0].new_page()
-        
-        all_data = []
-        for i, url in enumerate(LOCATIONS):
-            loc_name = url.split("/")[5]
-            def on_p(idx, total, name):
-                pct = 10 + (i * 30) + int((idx/total)*30)
-                report_progress(pct, f"{loc_name} {name}")
-            
-            all_data.extend(scrape_location(page, url, on_p))
-            
+        browser = p.chromium.launch(headless=True)
+        ctx = browser.new_context(user_agent=(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        ))
+        page = ctx.new_page()
+
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        time.sleep(2)
+
+        radio_btns = page.query_selector_all('input[type="radio"]')
+        room_data: list[dict] = []
+
+        for i, btn in enumerate(radio_btns):
+            label     = btn.evaluate_handle('el => el.closest("label")')
+            room_name = label.inner_text().split('\n')[0].strip()
+            pct       = 10 + int((i / max(len(radio_btns), 1)) * 85)
+            update_progress(loc_name, pct, f"{loc_name}/{room_name}")
+
+            label.click()
+            time.sleep(2)
+
+            today_str, today_times, tom_str, tom_times = get_available_times(page)
+            for t in today_times:
+                room_data.append({"room": room_name, "date": today_str, "time": t})
+            for t in tom_times:
+                room_data.append({"room": room_name, "date": tom_str,   "time": t})
+
         page.close()
-        print(json.dumps({"status": "done", "available_times": all_data}, ensure_ascii=False))
+        update_progress(loc_name, 100, f"{loc_name} 完了")
+        return room_data
+
+
+# ── メイン ────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    # 進捗状態を初期化
+    for url in LOCATIONS:
+        _progress_state[url.split("/")[5]] = (0, "")
+
+    all_data: list[dict] = []
+    errors:   list[str]  = []
+
+    with ThreadPoolExecutor(max_workers=len(LOCATIONS)) as executor:
+        future_to_url = {executor.submit(scrape_location_worker, url): url for url in LOCATIONS}
+        for future in as_completed(future_to_url):
+            url = future_to_url[future]
+            try:
+                all_data.extend(future.result())
+            except Exception as exc:
+                loc = url.split("/")[5]
+                errors.append(f"{loc}: {exc}")
+                update_progress(loc, 100, f"{loc} ERROR")
+
+    result: dict = {"status": "done", "available_times": all_data}
+    if errors:
+        result["errors"] = errors
+
+    print(json.dumps(result, ensure_ascii=False))
+
 
 if __name__ == "__main__":
     main()

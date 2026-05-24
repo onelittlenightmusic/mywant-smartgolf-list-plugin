@@ -9,6 +9,10 @@ wantType:
     version: '1.0'
     category: smartgolf
     pattern: independent
+    labels:
+      category-icon: Flag
+      category-bg-light: "linear-gradient(160deg, #bbf7d0 0%, #dcfce7 100%)"
+      category-bg-dark: "linear-gradient(160deg, #166534 0%, #052e16 100%)"
 
   finalResultField: smartgolf_all_available_times
 
@@ -129,6 +133,7 @@ wantType:
           name: smartgolf-selector
           type: choice
         spec:
+          imports:
+            smartgolf_all_available_times: choices
           params:
             target_param: selected_slot
-            choice_import_field: wants.check_smartgolf.smartgolf_all_available_times
