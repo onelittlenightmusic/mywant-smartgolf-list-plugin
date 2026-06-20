@@ -74,45 +74,54 @@ def get_available_times(page):
     return str(today), today_times, str(tomorrow), tomorrow_times
 
 
+CDP_URL = "http://localhost:9222"
+
+
 def scrape_location_worker(url: str) -> list[dict]:
-    """1店舗分を独立した Playwright インスタンスでスクレイピングする。
+    """1店舗分をCDP経由の既存ブラウザセッションでスクレイピングする。
 
     Playwright sync API はスレッド間で共有できないため、
-    スレッドごとに sync_playwright() を生成する。
+    スレッドごとに sync_playwright() を生成し CDP に接続する。
+    既存セッション（ログイン済み）を使うことでbot検出を回避する。
     """
     loc_name = url.split("/")[5]
     update_progress(loc_name, 5, f"{loc_name} 開始")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        ctx = browser.new_context(user_agent=(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-        ))
+        browser = p.chromium.connect_over_cdp(CDP_URL)
+        ctx  = browser.contexts[0]
         page = ctx.new_page()
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_load_state("networkidle", timeout=10000)
 
-        page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        time.sleep(2)
+            radio_btns = page.query_selector_all('input[type="radio"]')
+            room_data: list[dict] = []
 
-        radio_btns = page.query_selector_all('input[type="radio"]')
-        room_data: list[dict] = []
+            for i, btn in enumerate(radio_btns):
+                label     = btn.evaluate_handle('el => el.closest("label")')
+                room_name = label.inner_text().split('\n')[0].strip()
+                pct       = 10 + int((i / max(len(radio_btns), 1)) * 85)
+                update_progress(loc_name, pct, f"{loc_name}/{room_name}")
 
-        for i, btn in enumerate(radio_btns):
-            label     = btn.evaluate_handle('el => el.closest("label")')
-            room_name = label.inner_text().split('\n')[0].strip()
-            pct       = 10 + int((i / max(len(radio_btns), 1)) * 85)
-            update_progress(loc_name, pct, f"{loc_name}/{room_name}")
+                label.click()
+                # networkidle fires before the calendar AJAX loads; wait for inputs to appear in DOM
+                try:
+                    page.wait_for_selector(
+                        'input[name="dateTimeSelection"]', state="attached", timeout=15000
+                    )
+                except Exception:
+                    pass  # no slots for this room
 
-            label.click()
-            time.sleep(2)
+                today_str, today_times, tom_str, tom_times = get_available_times(page)
+                for t in today_times:
+                    room_data.append({"room": room_name, "date": today_str, "time": t})
+                for t in tom_times:
+                    room_data.append({"room": room_name, "date": tom_str,   "time": t})
 
-            today_str, today_times, tom_str, tom_times = get_available_times(page)
-            for t in today_times:
-                room_data.append({"room": room_name, "date": today_str, "time": t})
-            for t in tom_times:
-                room_data.append({"room": room_name, "date": tom_str,   "time": t})
+        finally:
+            page.close()
 
-        page.close()
         update_progress(loc_name, 100, f"{loc_name} 完了")
         return room_data
 

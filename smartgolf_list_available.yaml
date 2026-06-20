@@ -46,54 +46,62 @@ wantType:
       initialValue: ""
 
     - name: summary
-      description: Summary of available times
+      description: Human-readable summary of available SmartGolf times across all rooms
       type: string
       label: current
       persistent: true
       initialValue: ""
 
     - name: today_slots
-      description: Available slots for today
+      description: Available SmartGolf booking slots for today, grouped by room
       type: object
       label: current
       persistent: true
       initialValue: null
 
     - name: smartgolf_all_available_times
-      description: Full JSON output from skill containing all rooms and dates
-      type: object
+      description: >
+        All available SmartGolf booking slots across rooms and dates.
+        An array of slot objects, each with room (store/room name), date (YYYY-MM-DD),
+        and time (HH:MM) fields that can be used directly as smartgolf_book parameters.
+        Suitable as input to a choice want for user slot selection.
+      type: array
       label: current
       persistent: true
       initialValue: {}
+      exposable: true
       fetchFrom: mrs_raw_output
       onFetchData: "available_times"
 
     - name: first_room
-      description: First available room name
+      description: Room name of the earliest available SmartGolf slot (e.g. 北新宿店/右打席予約(Room01))
       type: string
       label: current
       persistent: true
       initialValue: ""
+      exposable: true
       fetchFrom: mrs_raw_output
       onFetchData: "available_times[0].room"
 
     - name: first_date
-      description: First available date
+      description: Date of the earliest available SmartGolf slot in YYYY-MM-DD format
       type: string
       label: current
       persistent: true
       initialValue: ""
+      exposable: true
       fetchFrom: mrs_raw_output
       onFetchData: "available_times[0].date"
 
     - name: first_time
-      description: First available time slot
+      description: Time of the earliest available SmartGolf slot in HH:MM format
       type: string
       label: current
       persistent: true
       initialValue: ""
+      exposable: true
       fetchFrom: mrs_raw_output
-      onFetchData: "available_times[0].times[0].time"
+      onFetchData: "available_times[0].time"
 
   finalizeWhen:
     achieved:
