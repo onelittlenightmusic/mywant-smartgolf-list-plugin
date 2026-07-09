@@ -18,11 +18,11 @@ wantType:
 
   state:
     - name: skill_timeout_seconds
-      description: Max seconds to wait for the skill script to complete (default 120)
+      description: Max seconds to wait for the skill script to complete (default 280 — must clear browser_run's own per-location timeout, see main.py's ROOM_STEPS timeout_ms)
       type: int
       label: goal
       persistent: false
-      initialValue: 120
+      initialValue: 280
 
     - name: skill_path
       description: Path to the MRS skill script (set by onInitialize)
