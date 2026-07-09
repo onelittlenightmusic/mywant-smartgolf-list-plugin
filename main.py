@@ -1,15 +1,10 @@
 import json
+import os
 import sys
-import time
 import threading
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
-
-try:
-    from playwright.sync_api import sync_playwright
-except ImportError:
-    print(json.dumps({"error": "playwright not found"}, ensure_ascii=False))
-    sys.exit(1)
 
 JST = timezone(timedelta(hours=9))
 
@@ -18,6 +13,35 @@ LOCATIONS = [
     "https://smartgolf.stores.jp/reserve/smartgolf_nakanoshimbashi/1459178/book/course_type",
     "https://smartgolf.stores.jp/reserve/smartgolf_shinnakano/4619269/book/course_type",
 ]
+
+MYWANT_API = os.environ.get("MYWANT_URL", "http://localhost:8080")
+
+
+def browser_run(url, steps, keep_open=False, background=True, timeout_ms=90000):
+    """Runs steps (a @puppeteer/replay UserFlow's Step[] JSON, plus our
+    read/readAll/loop/etc. customStep extensions) against url via the mywant
+    browser extension — the CDP-free replacement for
+    playwright.chromium.connect_over_cdp. See engine/server/handlers_web_wants.go's
+    browserRun and mcp/playwright-app/webext-src/browser-run-interpreter.ts.
+    background=True (default) opens the tab without stealing focus. Queued
+    browser_run calls execute concurrently (see background.js's
+    drainPendingActions), so the 3-location ThreadPoolExecutor below still
+    fetches in parallel rather than one location per alarm tick."""
+    payload = json.dumps({
+        "url": url, "steps": steps, "keep_open": keep_open,
+        "background": background, "timeout_ms": timeout_ms,
+    }).encode()
+    req = urllib.request.Request(
+        f"{MYWANT_API}/api/v1/web-wants/browser-run",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=(timeout_ms / 1000) + 10) as r:
+        data = json.loads(r.read())
+    if data.get("error"):
+        raise RuntimeError(data["error"])
+    return data.get("result", {})
 
 # ── 並列プログレス管理 ─────────────────────────────────────────────────────
 _progress_lock = threading.Lock()
@@ -42,88 +66,67 @@ def update_progress(loc_name: str, pct: int, msg: str) -> None:
 
 # ── スクレイピング ────────────────────────────────────────────────────────
 
-def get_available_times(page):
-    today    = datetime.now(JST).date()
-    tomorrow = today + timedelta(days=1)
-
-    date_inputs = page.query_selector_all('input[name="dateTimeSelection"]')
-    today_times, tomorrow_times = [], []
-
-    for inp in date_inputs:
-        val = inp.get_attribute('value')
-        if not val:
-            continue
-        try:
-            dt_jst = datetime.fromisoformat(val.replace('Z', '+00:00')).astimezone(JST)
-        except Exception:
-            continue
-
-        date_jst = dt_jst.date()
-        if date_jst not in (today, tomorrow):
-            continue
-
-        label = inp.evaluate_handle('el => el.closest("label")')
-        svg   = label.query_selector('svg')
-        if svg and 'rgb(0, 102, 255)' in svg.evaluate('el => getComputedStyle(el).fill'):
-            t = dt_jst.strftime('%H:%M')
-            if date_jst == today:
-                today_times.append(t)
-            else:
-                tomorrow_times.append(t)
-
-    return str(today), today_times, str(tomorrow), tomorrow_times
-
-
-CDP_URL = "http://localhost:9222"
+# 1店舗分: 各部屋(radio)を順にクリックし、クリック後に現れる日時候補
+# (input[name="dateTimeSelection"]) のうち、closest(label) 内のsvgの
+# computed fill色が青(rgb(0, 102, 255) = 空き)のものだけをvalue(ISO日時)
+# として収集する。閉じたlabel/svgの取得はCSSでは表現できないancestor
+# 探索が必要なため、xpath: ancestor::label[1] を使う（元のPlaywright実装の
+# el.closest("label") と同じ意味）。svgはHTML内でSVG名前空間を持つため
+# 無名前空間のxpathステップ "svg" では一致しない（既知のブラウザ挙動） —
+# local-name() で名前空間を無視してマッチさせる。
+ROOM_STEPS = [
+    {"type": "waitForElement", "selectors": [['input[type="radio"]']], "timeout": 15000},
+    {"type": "customStep", "name": "forEachClick", "parameters": {
+        "selector": 'input[type="radio"]',
+        "as": "rooms",
+        "trigger_field": {"selector": "xpath:ancestor::label[1]", "extract": "text"},
+        "trigger_key": "room",
+        "wait_after_click": {"selector": 'input[name="dateTimeSelection"]', "timeout_ms": 15000},
+        "read": {
+            "selector": 'input[name="dateTimeSelection"]',
+            "extract": "attr",
+            "attr": "value",
+            "filter": {
+                "selector": "xpath:ancestor::label[1]//*[local-name()='svg']",
+                "extract": "computedStyle",
+                "style_prop": "fill",
+                "contains": "rgb(0, 102, 255)",
+            },
+        },
+    }},
+]
 
 
 def scrape_location_worker(url: str) -> list[dict]:
-    """1店舗分をCDP経由の既存ブラウザセッションでスクレイピングする。
-
-    Playwright sync API はスレッド間で共有できないため、
-    スレッドごとに sync_playwright() を生成し CDP に接続する。
-    既存セッション（ログイン済み）を使うことでbot検出を回避する。
-    """
+    """1店舗分を browser_run 経由でスクレイピングする（拡張が1タブで全部屋を巡回）。"""
     loc_name = url.split("/")[5]
     update_progress(loc_name, 5, f"{loc_name} 開始")
 
-    with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(CDP_URL)
-        ctx  = browser.contexts[0]
-        page = ctx.new_page()
+    today = datetime.now(JST).date()
+    tomorrow = today + timedelta(days=1)
+
+    # 部屋数が多い店舗は forEachClick の wait_after_click(部屋ごと最大15秒)が
+    # 積み重なるため、拡張の1分ポーリング遅延も込みで余裕を持たせる。
+    result = browser_run(url, ROOM_STEPS, timeout_ms=240000)
+    rooms = result.get("rooms") or []
+
+    room_data: list[dict] = []
+    for entry in rooms:
+        val = entry.get("value")
+        room_name = (entry.get("room") or "").split("\n")[0].strip()
+        if not val:
+            continue
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_load_state("networkidle", timeout=10000)
+            dt_jst = datetime.fromisoformat(val.replace("Z", "+00:00")).astimezone(JST)
+        except Exception:
+            continue
+        date_jst = dt_jst.date()
+        if date_jst not in (today, tomorrow):
+            continue
+        room_data.append({"room": room_name, "date": str(date_jst), "time": dt_jst.strftime("%H:%M")})
 
-            radio_btns = page.query_selector_all('input[type="radio"]')
-            room_data: list[dict] = []
-
-            for i, btn in enumerate(radio_btns):
-                label     = btn.evaluate_handle('el => el.closest("label")')
-                room_name = label.inner_text().split('\n')[0].strip()
-                pct       = 10 + int((i / max(len(radio_btns), 1)) * 85)
-                update_progress(loc_name, pct, f"{loc_name}/{room_name}")
-
-                label.click()
-                # networkidle fires before the calendar AJAX loads; wait for inputs to appear in DOM
-                try:
-                    page.wait_for_selector(
-                        'input[name="dateTimeSelection"]', state="attached", timeout=15000
-                    )
-                except Exception:
-                    pass  # no slots for this room
-
-                today_str, today_times, tom_str, tom_times = get_available_times(page)
-                for t in today_times:
-                    room_data.append({"room": room_name, "date": today_str, "time": t})
-                for t in tom_times:
-                    room_data.append({"room": room_name, "date": tom_str,   "time": t})
-
-        finally:
-            page.close()
-
-        update_progress(loc_name, 100, f"{loc_name} 完了")
-        return room_data
+    update_progress(loc_name, 100, f"{loc_name} 完了")
+    return room_data
 
 
 # ── メイン ────────────────────────────────────────────────────────────────
