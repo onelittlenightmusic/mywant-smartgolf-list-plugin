@@ -5,7 +5,14 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 
-sys.path.insert(0, os.path.expanduser("~/work/machine-readable-skills-browser"))
+# mrs_browser ships as the "machine-readable-skills-browser" custom; a checkout
+# at ~/work wins when present so a development copy still overrides it.
+for _mrs_path in ("~/work/machine-readable-skills-browser",
+                  "~/.mywant/custom-types/machine-readable-skills-browser"):
+    _mrs_path = os.path.expanduser(_mrs_path)
+    if os.path.isdir(_mrs_path):
+        sys.path.insert(0, _mrs_path)
+        break
 from mrs_browser import browser_run  # noqa: E402
 
 JST = timezone(timedelta(hours=9))
