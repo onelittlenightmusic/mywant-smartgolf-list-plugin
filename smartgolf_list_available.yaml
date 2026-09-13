@@ -42,7 +42,12 @@ wantType:
       description: Error message if execution failed
       type: string
       label: current
-      persistent: true
+      # NOT persistent, deliberately: this field is what finalizeWhen.failed
+      # reads, so a value that survives a restart is a failure the want can
+      # never be restarted out of — the monitor is cancelled in the same second
+      # it boots, before it can try again. The skill's OUTPUT stays persistent;
+      # the reason the last attempt failed is not an answer worth keeping.
+      persistent: false
       initialValue: ""
 
     - name: summary
