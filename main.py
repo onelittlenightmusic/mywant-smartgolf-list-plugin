@@ -87,7 +87,9 @@ def scrape_location_worker(url: str) -> list[dict]:
 
     # 部屋数が多い店舗は forEachClick の wait_after_click(部屋ごと最大15秒)が
     # 積み重なるため、拡張の1分ポーリング遅延も込みで余裕を持たせる。
-    result = browser_run(url, ROOM_STEPS, timeout_ms=240000)
+    # quiet: 空き状況の確認はユーザーの行動を妨げない。ログイン切れなどでも
+    # 通知を出さず、タブも残さない。
+    result = browser_run(url, ROOM_STEPS, timeout_ms=240000, quiet=True)
     rooms = result.get("rooms") or []
 
     room_data: list[dict] = []
