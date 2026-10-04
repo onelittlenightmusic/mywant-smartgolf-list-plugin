@@ -11,6 +11,8 @@ wantType:
     pattern: independent
     labels:
       category-icon: Flag
+      # What a person calls it — the robot finds the want by these too.
+      aliases: "スマートゴルフの空き,ゴルフの空き,ゴルフの空き時間"
       category-bg-light: "linear-gradient(160deg, #bbf7d0 0%, #dcfce7 100%)"
       category-bg-dark: "linear-gradient(160deg, #166534 0%, #052e16 100%)"
 
