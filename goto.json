@@ -1,0 +1,23 @@
+{
+  "_comment": "空き枠へ連れて行く手順のテンプレート。{{…}} は main.py が枠ごとに埋める: room（部屋のラベル: 中野郵便局前店/打席予約(Room02)）、bay（Room02 の部分）、value（枠の日時: dateTimeSelection の value, ISO）、when（11/1 19:00）、name（部品の名前）。say_key は場面で、言葉は voice.py が作る。部品は web want の部品と同じ形（role, name, selector）なので、拡張で保存した部品の selector をそのまま使える。予約を確定する Confirm Reservation は指して教えるだけで、押すのは人。",
+  "guide": {"kind": "slot", "room": "{{room}}", "bay": "{{bay}}", "when": "{{when}}", "name": "{{name}}"},
+  "steps": [
+    {"type": "waitForElement", "selectors": [["input[type=\"radio\"]"]], "timeout": 15000},
+    {"type": "click", "selectors": [["xpath://label[contains(., '{{room}}')]//input[@type='radio']"]], "say_key": "choose_room"},
+    {"type": "customStep", "name": "sleep", "parameters": {"ms": 1500}},
+    {"type": "waitForElement", "selectors": [["input[name=\"dateTimeSelection\"][value=\"{{value}}\"]"]], "timeout": 15000, "say_key": "find_slot"}
+  ],
+  "elements": [
+    {"role": "radio", "name": "{{name}}", "selector": "input[name=\"dateTimeSelection\"][value=\"{{value}}\"]", "say_key": "arrived"},
+    {"role": "button", "name": "Next", "selector": "button[form=\"courseTypeBookingForm\"]", "say_key": "next"}
+  ],
+  "then": [
+    {
+      "url_contains": "/course_type/confirm",
+      "elements": [
+        {"role": "checkbox", "name": "利用規約に同意", "selector": "input[type=\"checkbox\"]", "say_key": "agree"},
+        {"role": "button", "name": "Confirm Reservation", "selector": "xpath://button[normalize-space(.)='Confirm Reservation']", "say_key": "confirm"}
+      ]
+    }
+  ]
+}

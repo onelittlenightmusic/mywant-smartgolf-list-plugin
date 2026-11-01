@@ -93,6 +93,36 @@ ROOM_STEPS = [
 ]
 
 
+# 空き枠へ連れて行く手順の形は goto.json（SDK の取り決め、mywant/guide.py）。
+# 部屋や時刻で変わるところだけが {{…}} で、枠ごとに fill_goto が埋める。
+try:
+    from mywant import fill_goto  # noqa: E402
+except ImportError:
+    # SDK のない実行環境（ローカルの Docker runner など）では同じことをここで。
+    def _fill(t, v):
+        if isinstance(t, str):
+            for k, x in v.items():
+                t = t.replace("{{" + k + "}}", str(x))
+            return t
+        if isinstance(t, list):
+            return [_fill(i, v) for i in t]
+        if isinstance(t, dict):
+            return {k: _fill(i, v) for k, i in t.items() if not k.startswith("_")}
+        return t
+
+    _GOTO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "goto.json")
+
+    def fill_goto(values: dict) -> dict:
+        with open(_GOTO, encoding="utf-8") as f:
+            return _fill(json.load(f), values)
+
+
+def goto_slot(room: str, value: str, name: str, when: str = "") -> dict:
+    """予約ページのこの枠へ連れて行く手順（goto.json をこの枠の値で埋めたもの）。"""
+    bay = room.split("/")[-1] if "/" in room else room
+    return fill_goto({"room": room, "bay": bay, "value": value, "when": when, "name": name})
+
+
 def scrape_location_worker(url: str) -> list[dict]:
     """1店舗分を browser_run 経由でスクレイピングする（拡張が1タブで全部屋を巡回）。"""
     loc_name = url.split("/")[5]
@@ -130,6 +160,8 @@ def scrape_location_worker(url: str) -> list[dict]:
             "time": dt_jst.strftime("%H:%M"),
             "store": STORE_NAMES.get(url.split("/")[4], room_name.split("/")[0] or loc_name),
             "url": url,
+            "goto": goto_slot(room_name, val, f"{dt_jst.month}/{dt_jst.day} {dt_jst.strftime('%H:%M')} {room_name}",
+                              f"{dt_jst.month}/{dt_jst.day} {dt_jst.strftime('%H:%M')}"),
         })
 
     update_progress(loc_name, 100, f"{loc_name} 完了")
