@@ -2,7 +2,6 @@ import json
 import os
 import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 
 # mrs_browser ships as the "machine-readable-skills-browser" custom; a checkout
@@ -17,6 +16,19 @@ from mrs_browser import browser_run  # noqa: E402
 
 JST = timezone(timedelta(hours=9))
 
+from concurrent.futures import ThreadPoolExecutor, as_completed  # noqa: E402
+
+try:
+    from mywant import parallel  # noqa: E402
+except ImportError:
+    # SDK のない実行環境では同じ読み方をここで（MYWANT_PARALLEL、未設定なら全部）。
+    def parallel(default: int) -> int:
+        raw = os.environ.get("MYWANT_PARALLEL", "").strip()
+        try:
+            return max(1, min(int(raw), default)) if raw else max(1, default)
+        except ValueError:
+            return max(1, default)
+
 LOCATIONS = [
     "https://smartgolf.stores.jp/reserve/smartgolf_kitashinjuku/3421038/book/course_type",
     "https://smartgolf.stores.jp/reserve/smartgolf_nakanoshimbashi/1459178/book/course_type",
@@ -24,6 +36,9 @@ LOCATIONS = [
     "https://smartgolf.stores.jp/reserve/smartgolf_nakano-yubinkyokumae/1879039/book/course_type",
     "https://smartgolf.stores.jp/reserve/smartgolf_hatsudai/3742491/book/course_type",
 ]
+
+# 何店同時に読むか（上の parallel、サーバーが決める）。
+WORKERS = parallel(len(LOCATIONS))
 
 # 店の呼び名。空き枠ごとに store として載せ、カードはこれで店を並べる。
 # 知らない店は URL の店名部分をそのまま使う。
@@ -94,33 +109,32 @@ ROOM_STEPS = [
 
 
 # 空き枠へ連れて行く手順の形は goto.json（SDK の取り決め、mywant/guide.py）。
-# 部屋や時刻で変わるところだけが {{…}} で、枠ごとに fill_goto が埋める。
+# 部屋や時刻で変わるところだけが {{…}}。形は答えに一度だけ（goto_template）、
+# 枠には埋める値（goto_values）だけを持たせ、押されたとき GUI が埋める。
+# 枠ごとに丸ごと入れると、百数十枠 × 履歴の分だけ同じ手順が state に積もり、
+# 小さいサーバーのバックエンドが state の書き出しで落ちた（fly、2026-11-01）。
 try:
-    from mywant import fill_goto  # noqa: E402
+    from mywant import goto_template  # noqa: E402
 except ImportError:
     # SDK のない実行環境（ローカルの Docker runner など）では同じことをここで。
-    def _fill(t, v):
-        if isinstance(t, str):
-            for k, x in v.items():
-                t = t.replace("{{" + k + "}}", str(x))
-            return t
+    def _strip(t):
         if isinstance(t, list):
-            return [_fill(i, v) for i in t]
+            return [_strip(i) for i in t]
         if isinstance(t, dict):
-            return {k: _fill(i, v) for k, i in t.items() if not k.startswith("_")}
+            return {k: _strip(i) for k, i in t.items() if not k.startswith("_")}
         return t
 
     _GOTO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "goto.json")
 
-    def fill_goto(values: dict) -> dict:
+    def goto_template() -> dict:
         with open(_GOTO, encoding="utf-8") as f:
-            return _fill(json.load(f), values)
+            return _strip(json.load(f))
 
 
-def goto_slot(room: str, value: str, name: str, when: str = "") -> dict:
-    """予約ページのこの枠へ連れて行く手順（goto.json をこの枠の値で埋めたもの）。"""
+def goto_values(room: str, value: str, name: str, when: str = "") -> dict:
+    """予約ページのこの枠へ連れて行く手順を goto.json から作るための値。"""
     bay = room.split("/")[-1] if "/" in room else room
-    return fill_goto({"room": room, "bay": bay, "value": value, "when": when, "name": name})
+    return {"room": room, "bay": bay, "value": value, "when": when, "name": name}
 
 
 def scrape_location_worker(url: str) -> list[dict]:
@@ -135,7 +149,8 @@ def scrape_location_worker(url: str) -> list[dict]:
     # 積み重なるため、拡張の1分ポーリング遅延も込みで余裕を持たせる。
     # quiet: 空き状況の確認はユーザーの行動を妨げない。ログイン切れなどでも
     # 通知を出さず、タブも残さない。
-    result = browser_run(url, ROOM_STEPS, timeout_ms=240000, quiet=True)
+    # 一店ずつ読むときは、一店にかけられるのは全体（skill_timeout_seconds）の五分の一まで。
+    result = browser_run(url, ROOM_STEPS, timeout_ms=240000 if WORKERS > 1 else 110000, quiet=True)
     rooms = result.get("rooms") or []
 
     room_data: list[dict] = []
@@ -160,8 +175,8 @@ def scrape_location_worker(url: str) -> list[dict]:
             "time": dt_jst.strftime("%H:%M"),
             "store": STORE_NAMES.get(url.split("/")[4], room_name.split("/")[0] or loc_name),
             "url": url,
-            "goto": goto_slot(room_name, val, f"{dt_jst.month}/{dt_jst.day} {dt_jst.strftime('%H:%M')} {room_name}",
-                              f"{dt_jst.month}/{dt_jst.day} {dt_jst.strftime('%H:%M')}"),
+            "goto_values": goto_values(room_name, val, f"{dt_jst.month}/{dt_jst.day} {dt_jst.strftime('%H:%M')} {room_name}",
+                                       f"{dt_jst.month}/{dt_jst.day} {dt_jst.strftime('%H:%M')}"),
         })
 
     update_progress(loc_name, 100, f"{loc_name} 完了")
@@ -178,7 +193,10 @@ def main() -> None:
     all_data: list[dict] = []
     errors:   list[str]  = []
 
-    with ThreadPoolExecutor(max_workers=len(LOCATIONS)) as executor:
+    # 何店同時に読むかはサーバー次第（MYWANT_PARALLEL、SDK の parallel）。
+    # 何も言われなければ全店同時。小さいサーバー（fly の 512MB では 2026-11-01、
+    # 5店同時の待ちが重なってバックエンドが落ちた）は 1 と言い、一店ずつになる。
+    with ThreadPoolExecutor(max_workers=WORKERS) as executor:
         future_to_url = {executor.submit(scrape_location_worker, url): url for url in LOCATIONS}
         for future in as_completed(future_to_url):
             url = future_to_url[future]
@@ -191,7 +209,7 @@ def main() -> None:
 
     # 時刻順に。店ごとの並列取得は終わった順に混ざるので、ここで並べ直す。
     all_data.sort(key=lambda d: (d["date"], d["time"], d["store"], d["room"]))
-    result: dict = {"status": "done", "available_times": all_data}
+    result: dict = {"status": "done", "available_times": all_data, "goto_template": goto_template()}
     if errors:
         result["errors"] = errors
 

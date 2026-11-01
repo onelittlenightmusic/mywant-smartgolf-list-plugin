@@ -20,11 +20,11 @@ wantType:
 
   state:
     - name: skill_timeout_seconds
-      description: Max seconds to wait for the skill script to complete (default 280 — must clear browser_run's own per-location timeout, see main.py's ROOM_STEPS timeout_ms)
+      description: Max seconds to wait for the skill script to complete (default 580 — enough for the stores read one after another where the server says MYWANT_PARALLEL=1, each given up to 110s by main.py's browser_run timeout_ms; read all at once, 240s each)
       type: int
       label: goal
       persistent: false
-      initialValue: 280
+      initialValue: 580
 
     - name: skill_path
       description: Path to the MRS skill script (set by onInitialize)
@@ -71,7 +71,7 @@ wantType:
         All available SmartGolf booking slots across rooms and dates.
         An array of slot objects in time order, each with room (store/room name), date (YYYY-MM-DD),
         and time (HH:MM) fields that can be used directly as smartgolf_book parameters,
-        plus store (the store's name) and url (its booking page).
+        plus store (the store's name), url (its booking page) and goto_values (filled into goto_template).
         Suitable as input to a choice want for user slot selection.
       type: array
       label: current
@@ -110,6 +110,18 @@ wantType:
       exposable: true
       fetchFrom: mrs_raw_output
       onFetchData: "available_times[0].time"
+
+    - name: goto_template
+      description: >
+        The way to one slot on the booking page (goto.json), kept once: each slot in
+        smartgolf_all_available_times carries only goto_values, filled into this
+        when the slot is opened.
+      type: object
+      label: current
+      persistent: true
+      initialValue: {}
+      fetchFrom: mrs_raw_output
+      onFetchData: "goto_template"
 
   finalizeWhen:
     achieved:
