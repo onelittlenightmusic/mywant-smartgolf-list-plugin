@@ -21,7 +21,19 @@ LOCATIONS = [
     "https://smartgolf.stores.jp/reserve/smartgolf_kitashinjuku/3421038/book/course_type",
     "https://smartgolf.stores.jp/reserve/smartgolf_nakanoshimbashi/1459178/book/course_type",
     "https://smartgolf.stores.jp/reserve/smartgolf_shinnakano/4619269/book/course_type",
+    "https://smartgolf.stores.jp/reserve/smartgolf_nakano-yubinkyokumae/1879039/book/course_type",
+    "https://smartgolf.stores.jp/reserve/smartgolf_hatsudai/3742491/book/course_type",
 ]
+
+# 店の呼び名。空き枠ごとに store として載せ、カードはこれで店を並べる。
+# 知らない店は URL の店名部分をそのまま使う。
+STORE_NAMES = {
+    "smartgolf_kitashinjuku": "北新宿店",
+    "smartgolf_nakanoshimbashi": "中野新橋店",
+    "smartgolf_shinnakano": "新中野店",
+    "smartgolf_nakano-yubinkyokumae": "中野郵便局前店",
+    "smartgolf_hatsudai": "初台店",
+}
 
 # ── 並列プログレス管理 ─────────────────────────────────────────────────────
 _progress_lock = threading.Lock()
@@ -61,7 +73,11 @@ ROOM_STEPS = [
         "as": "rooms",
         "trigger_field": {"selector": "xpath:ancestor::label[1]", "extract": "text"},
         "trigger_key": "room",
-        "wait_after_click": {"selector": 'input[name="dateTimeSelection"]', "timeout_ms": 15000},
+        # until_changed: 部屋を切り替えても前の部屋の表がしばらく残るので、
+        # 出ていることだけを待つと前の部屋の空きを読んでしまう（Room02 に
+        # Room01 の空きが入っていた）。表が変わって落ち着くまで待つ。
+        "wait_after_click": {"selector": 'input[name="dateTimeSelection"]', "timeout_ms": 15000,
+                             "until_changed": True},
         "read": {
             "selector": 'input[name="dateTimeSelection"]',
             "extract": "attr",
@@ -105,7 +121,16 @@ def scrape_location_worker(url: str) -> list[dict]:
         date_jst = dt_jst.date()
         if date_jst not in (today, tomorrow):
             continue
-        room_data.append({"room": room_name, "date": str(date_jst), "time": dt_jst.strftime("%H:%M")})
+        # store と url: どの店のどの枠かを、カードが店ごとに並べて予約ページへ
+        # 飛ばせるように。url は店の予約ページ（枠そのものへ直接入るリンクは
+        # サイトにないので、店の入口）。
+        room_data.append({
+            "room": room_name,
+            "date": str(date_jst),
+            "time": dt_jst.strftime("%H:%M"),
+            "store": STORE_NAMES.get(url.split("/")[4], room_name.split("/")[0] or loc_name),
+            "url": url,
+        })
 
     update_progress(loc_name, 100, f"{loc_name} 完了")
     return room_data
@@ -132,6 +157,8 @@ def main() -> None:
                 errors.append(f"{loc}: {exc}")
                 update_progress(loc, 100, f"{loc} ERROR")
 
+    # 時刻順に。店ごとの並列取得は終わった順に混ざるので、ここで並べ直す。
+    all_data.sort(key=lambda d: (d["date"], d["time"], d["store"], d["room"]))
     result: dict = {"status": "done", "available_times": all_data}
     if errors:
         result["errors"] = errors

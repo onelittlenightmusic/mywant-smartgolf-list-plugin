@@ -3,7 +3,7 @@ wantType:
     name: smartgolf_list_available
     title: SmartGolf Available Times
     description: |
-      Lists available booking times for all SmartGolf rooms (北新宿/中野新橋/新中野)
+      Lists available booking times for all SmartGolf rooms (北新宿/中野新橋/新中野/中野郵便局前/初台)
       for today and tomorrow via Playwright.
       Completes after a single execution.
     version: '1.0'
@@ -69,8 +69,9 @@ wantType:
     - name: smartgolf_all_available_times
       description: >
         All available SmartGolf booking slots across rooms and dates.
-        An array of slot objects, each with room (store/room name), date (YYYY-MM-DD),
-        and time (HH:MM) fields that can be used directly as smartgolf_book parameters.
+        An array of slot objects in time order, each with room (store/room name), date (YYYY-MM-DD),
+        and time (HH:MM) fields that can be used directly as smartgolf_book parameters,
+        plus store (the store's name) and url (its booking page).
         Suitable as input to a choice want for user slot selection.
       type: array
       label: current
