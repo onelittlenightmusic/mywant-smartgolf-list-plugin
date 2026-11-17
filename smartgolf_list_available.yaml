@@ -52,13 +52,6 @@ wantType:
       persistent: false
       initialValue: ""
 
-    - name: summary
-      description: Human-readable summary of available SmartGolf times across all rooms
-      type: string
-      label: current
-      persistent: true
-      initialValue: ""
-
     - name: today_slots
       description: Available SmartGolf booking slots for today, grouped by room
       type: object
