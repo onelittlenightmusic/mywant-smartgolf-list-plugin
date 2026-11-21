@@ -185,6 +185,42 @@ def scrape_location_worker(url: str) -> list[dict]:
 
 # ── メイン ────────────────────────────────────────────────────────────────
 
+def memo() -> dict:
+    """前回の自分が残したメモ（_memo）。SDK の current() から（共有の
+    プラグインサービスでも単独の起動でも）。SDK が無ければ環境変数から。"""
+    try:
+        from mywant import current
+        return dict(current().memo or {})
+    except Exception:
+        try:
+            return json.loads(os.environ.get("MYWANT_WANT_MEMO") or "{}") or {}
+        except ValueError:
+            return {}
+
+
+def slot_key(d: dict) -> str:
+    return f'{d.get("date", "")} {d.get("time", "")} {d.get("room", "")}'
+
+
+def new_slots(by_loc: dict[str, list[dict]], failed: set[str], seen: dict) -> tuple[list[str], dict]:
+    """前回見ていなかった空き枠と、次に覚えておく店ごとの枠。
+
+    店（予約ページの URL の店名）ごとに比べる: 前回も今回も読めた店の、
+    前回なかった枠だけが新しい。読めなかった店は前回の覚えをそのまま残す
+    （次に読めた時、その店の枠が全部「新しい」にならないように）。初めて
+    読んだ店の枠は新しいとしない。
+    """
+    now = {loc: [slot_key(d) for d in slots] for loc, slots in by_loc.items()}
+    fresh = []
+    for loc, keys in now.items():
+        if loc in seen:
+            before = set(seen[loc])
+            fresh += [k for k in keys if k not in before]
+    kept = {loc: keys for loc, keys in seen.items() if loc in failed}
+    kept.update(now)
+    return fresh, kept
+
+
 def main() -> None:
     # 進捗状態を初期化
     for url in LOCATIONS:
@@ -192,6 +228,8 @@ def main() -> None:
 
     all_data: list[dict] = []
     errors:   list[str]  = []
+    failed_locs: set[str] = set()
+    by_loc: dict[str, list[dict]] = {}
 
     # 何店同時に読むかはサーバー次第（MYWANT_PARALLEL、SDK の parallel）。
     # 何も言われなければ全店同時。小さいサーバー（fly の 512MB では 2026-11-01、
@@ -201,14 +239,23 @@ def main() -> None:
         for future in as_completed(future_to_url):
             url = future_to_url[future]
             try:
-                all_data.extend(future.result())
+                slots = future.result()
+                all_data.extend(slots)
+                by_loc[url.split("/")[5]] = slots
             except Exception as exc:
                 loc = url.split("/")[5]
+                failed_locs.add(loc)
                 errors.append(f"{loc}: {exc}")
                 update_progress(loc, 100, f"{loc} ERROR")
 
     # 時刻順に。店ごとの並列取得は終わった順に混ざるので、ここで並べ直す。
     all_data.sort(key=lambda d: (d["date"], d["time"], d["store"], d["room"]))
+    # 新しく空いた枠があれば timing new_slot。店ごとに前回見た枠をメモに。
+    fresh, seen = new_slots(by_loc, failed_locs, memo().get("seen") or {})
+    if fresh:
+        print(json.dumps({"_timing": "new_slot"}, ensure_ascii=False), flush=True)
+    print(json.dumps({"_memo": {"seen": seen, "new": fresh[:20]}}, ensure_ascii=False), flush=True)
+
     result: dict = {"status": "done", "available_times": all_data, "goto_template": goto_template()}
     if errors:
         result["errors"] = errors

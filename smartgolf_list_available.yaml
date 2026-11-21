@@ -18,6 +18,16 @@ wantType:
 
   finalResultField: smartgolf_all_available_times
 
+  # When it tells of its answer, besides every new one (the standard timing
+  # "answer"). new_slot: a slot opened that was not there last time — main.py
+  # compares store by store with the slots it kept in its memo, so a slot
+  # taken or gone by is not news, nor a store read again after it failed.
+  timings:
+    - name: new_slot
+      description: 新しく空き枠が出たとき
+      murmur: true
+      notify: true
+
   state:
     - name: skill_timeout_seconds
       description: Max seconds to wait for the skill script to complete (default 580 — enough for the stores read one after another where the server says MYWANT_PARALLEL=1, each given up to 110s by main.py's browser_run timeout_ms; read all at once, 240s each)
