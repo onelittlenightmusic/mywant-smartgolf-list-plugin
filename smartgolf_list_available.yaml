@@ -25,6 +25,7 @@ wantType:
   timings:
     - name: new_slot
       description: 新しく空き枠が出たとき
+      icon: calendar-plus
       murmur: true
       notify: true
 
