@@ -10,6 +10,9 @@ wantType:
     category: smartgolf
     pattern: independent
     labels:
+      # What the robot reads a request against, when it asks Laya which want
+      # it is: the type in a few words of its own (laya-option).
+      laya-option: "スマートゴルフの空き時間を探す"
       category-icon: Flag
       # What a person calls it — the robot finds the want by these too.
       aliases: "スマートゴルフの空き,ゴルフの空き,ゴルフの空き時間,golf"
@@ -28,6 +31,13 @@ wantType:
       icon: calendar-plus
       murmur: true
       notify: true
+
+  # A reservation gone (attends: what an irregular moment nobody hears
+  # requires — the robot proposes looking again): the free times to book another.
+  capabilities:
+    - name: find_slot
+      description: 予約がなくなったとき、代わりの空き時間を探す
+      attends: [rebook]
 
   state:
     - name: skill_timeout_seconds
@@ -169,3 +179,12 @@ wantType:
             smartgolf_all_available_times: choices
           params:
             target_param: selected_slot
+
+  # How a want of this type is asked for, in words, and what it is made with
+  # (want-spec asks): what reads requests (the robot, Laya) learns from these
+  # and is tested on them. A parameter left out is one the request does not say.
+  asks:
+    - say: "スマートゴルフの空き"
+      variants: ["スマートゴルフの空いてる時間", "スマートゴルフの空き枠を探して", "スマートゴルフで空いてるところ"]
+    - say: "ゴルフの空き時間を見せて"
+      variants: ["ゴルフの空き", "ゴルフの空いてる枠", "ゴルフで今日空いてる時間"]
